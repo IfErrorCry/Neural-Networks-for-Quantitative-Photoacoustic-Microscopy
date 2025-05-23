@@ -1,0 +1,141 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.interpolate import interp1d, RectBivariateSpline
+
+
+def kernel(tV):
+    N = len(tV)
+    Amat = np.zeros((N, N))
+    for i in range(N):
+        for j in range(i):
+            Amat[i, j] = np.sqrt(tV[i]**2 - tV[j]**2) - np.sqrt(tV[i]**2 - tV[j+1]**2)
+    return Amat
+
+
+def wavstarprop(data, xV, tV, R0, T0):
+    Nt, Nphi = data.shape
+    Nx = len(xV)
+    dt = tV[1] - tV[0]
+    dphi = 2 * np.pi / Nphi
+    phiV = np.linspace(0, 2 * np.pi, Nphi, endpoint=False)
+    X, Y = np.meshgrid(xV, xV)
+    MF = np.zeros((Nphi, Nt))
+    Amat = kernel(tV)
+    F1 = np.zeros((Nx, Nx))
+
+    for i in range(Nphi):
+        p = data[:, i]
+        p = np.gradient(p, dt)
+        p[:2] = 0
+        mf = Amat.T @ p
+        tVmod = np.maximum(tV, 0.5 * dt)
+        mf /= tVmod
+        MF[i, :] = mf
+
+    for i in range(Nphi):
+        phi = phiV[i]
+        xc = R0 * np.cos(phi)
+        yc = R0 * np.sin(phi)
+        D = np.sqrt((X - xc)**2 + (Y - yc)**2)
+        mf = MF[i, :]
+        interp_func = interp1d(tV, mf, kind='linear', bounds_error=False, fill_value=0.0)
+        fadd = -interp_func(D.ravel()).reshape(D.shape)
+        F1 += fadd * dphi
+
+    RR = np.sqrt(X**2 + Y**2)
+    # WBP = np.rot90(F1, k = -1)
+    WBP = (F1.T)/ np.pi
+    WBP[RR > R0] = 0
+    return WBP
+
+
+def wavprop(F , xV, tV, Nphi, R0):
+    Xi = xV[-1]
+    Xo = 2 * Xi
+    Nx = len(xV)
+    Nt = len(tV)
+    dt = tV[1]-tV[0]
+    Nxo = 2 * Nx
+    xVo = np.linspace(-Xo, Xo, Nxo)
+    phiV = np.linspace(0, 2 * np.pi, Nphi, endpoint=False)
+    XC = R0 * np.cos(phiV)
+    YC = R0 * np.sin(phiV)
+    X, Y = np.meshgrid(xVo, xVo)
+
+    kV = np.fft.ifftshift(np.linspace(-Nxo/2, Nxo/2-1, Nxo)) * np.pi / Xo
+    k1, k2 = np.meshgrid(kV, kV)
+    km = np.sqrt(k1**2 + k2**2)
+
+    Data = np.zeros((Nt, Nphi))
+    F = np.pad(F, ((Nx//2, Nx//2), (Nx//2, Nx//2)), mode='constant')
+    W = F.copy()
+    Walt = np.zeros_like(W)
+    V = W
+
+    for ii in range(Nt):
+        FV = np.fft.fft2(V)
+        FW = np.fft.fft2(W)
+        LW = -4 * np.sin(dt * km / 2)**2 * (FW - FV)
+        LW1 = np.fft.ifft2(LW)
+        Wneu = 2 * W - Walt + LW1
+        Walt = W
+        f = RectBivariateSpline(xVo, xVo, np.real(W))
+        Pcirc_time = f(XC, YC, grid=False)
+        Data[ii, :] = Pcirc_time
+        W = Wneu
+    return Data, np.real(W)
+
+
+Nx = 128
+xV = np.linspace(-1, 1, Nx)
+X, Y = np.meshgrid(xV, xV)
+F = np.exp(-((X - 0.1)**2 + (Y + 0.3)**2) / (2 * 0.05**2))
+
+Nt = 300
+T0 = 2
+tV = np.linspace(0, T0, Nt)
+Nphi = 100
+R0 = 1.0
+
+
+phiV = np.linspace(0, 2 * np.pi, Nphi, endpoint=False)
+
+
+
+
+Data, W = wavprop(F, xV, tV, Nphi, R0)
+recon = wavstarprop(Data, xV, tV, R0, T0)
+
+
+
+plt.figure(figsize=(10, 10))
+plt.subplot(1, 3, 1)
+plt.imshow(Data, cmap='hot')
+plt.title("Data")
+plt.subplot(1, 3, 2)
+plt.imshow(F, cmap='hot')
+plt.title("F")
+plt.subplot(1, 3, 3)
+plt.imshow(W, cmap='hot')
+plt.title("P")
+plt.show()
+
+
+plt.figure(figsize=(10, 5))
+plt.subplot(1, 3, 1)
+plt.imshow(F, extent=[-1.2,1.2,-1.2,1.2], cmap='hot')
+plt.colorbar()
+plt.title("True Source")
+
+plt.subplot(1, 3, 2)
+plt.imshow(recon, extent=[-1.2,1.2,-1.2,1.2], cmap='hot')
+plt.colorbar()
+plt.title("Reconstructed")
+
+plt.subplot(1, 3, 3)
+plt.imshow(np.abs(F - recon), extent=[-1.2,1.2,-1.2,1.2], cmap='hot')
+plt.colorbar()
+plt.title("Abs Error")
+
+plt.tight_layout()
+plt.show()
